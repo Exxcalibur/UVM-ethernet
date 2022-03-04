@@ -185,9 +185,15 @@ typedef uvm_sequencer #(my_transaction) my_sequencer;
 
 
 class my_agent extends uvm_agent;
+    
+   `uvm_component_utils(my_agent)
+
     my_sequencer my_sequencer_inst;
     my_driver my_driver_inst;
     my_monitor my_monitor_inst;
+
+    uvm_analysis_port#(my_transaction) uap;
+    uvm_analysis_port#(my_transaction) uap_mon;    
     
     function new(string name, uvm_component parent);
         super.new(name, parent);
@@ -196,20 +202,22 @@ class my_agent extends uvm_agent;
     extern virtual function void build_phase(uvm_phase phase);
     extern virtual function void connect_phase(uvm_phase phase);
     
-    uvm_analysis_port#(eth_packet) uap;
-    uvm_analysis_port#(eth_packet) uap_mon;
     
-    `uvm_component_utils_begin(eth_agent)
-        `uvm_field_object (my_sequencer_inst , UVM_ALL_ON)
-    	`uvm_field_object (my_driver_inst    , UVM_ALL_ON)
-    	`uvm_field_object (my_monitor_inst   , UVM_ALL_ON)
-    `uvm_component_utils_end
+    // Not needed if no agent manipulation
+    //`uvm_component_utils_begin(eth_agent)
+    //    `uvm_field_object (my_sequencer_inst , UVM_ALL_ON)
+    //	`uvm_field_object (my_driver_inst    , UVM_ALL_ON)
+    //	`uvm_field_object (my_monitor_inst   , UVM_ALL_ON)
+    //`uvm_component_utils_end
+
 endclass : my_agent
 
 function void my_agent::build_phase(uvm_phase phase);
     super.build_phase(phase);
+    uap_mon = new("uap_mon", this);
     if(is_active == UVM_ACTIVE)
     begin
+        uap = new("uap", this);
         my_sequencer_inst = my_sequencer::type_id::create("my_sequencer_inst",this);
     	my_driver_inst = my_driver::type_id::create("my_driver_inst",this);
     	my_monitor_inst = my_monitor::type_id::create("my_monitor_inst",this);
@@ -223,12 +231,12 @@ function void my_agent::connect_phase(uvm_phase phase);
     if(is_active == UVM_ACTIVE)
     begin
         my_driver_inst.seq_item_port.connect(my_sequencer_inst.seq_item_export);
-    	this.uap = my_driver_inst.uap;
-        this.uap_mon = my_monitor_inst.uap;
+    	my_driver_inst.uap.connect(uap);
+        my_monitor_inst.uap.connect(uap_mon);
     end
     else
     begin
-        this.uap_mon = my_monitor_inst.uap;
+        my_monitor_inst.uap.connect(uap_mon);
     end
 endfunction : connect_phase
 
@@ -239,15 +247,18 @@ endfunction : connect_phase
 *****************************************/
 
 class my_environment extends uvm_env;
+
     `uvm_component_utils(my_environment)
+
+    UVM_FILE file_h;
+
+    my_agent my_agent_input_inst;
+    my_model my_model_inst;
+    my_scoreboard my_scoreboard_inst;
     
-    eth_agent eth_agent_input_inst;
-    eth_model eth_model_inst;
-    eth_scoreboard eth_scoreboard_inst;
-    
-    uvm_tlm_analysis_fifo #(eth_packet) agt_scb_fifo;
-    uvm_tlm_analysis_fifo #(eth_packet) agt_mdl_fifo;
-    uvm_tlm_analysis_fifo #(eth_packet) mdl_scb_fifo;
+    uvm_tlm_analysis_fifo #(my_transaction) agt_scb_fifo;
+    uvm_tlm_analysis_fifo #(my_transaction) agt_mdl_fifo;
+    uvm_tlm_analysis_fifo #(my_transaction) mdl_scb_fifo;
     
     function new(string name, uvm_component parent);
         super.new(name, parent);
@@ -259,30 +270,51 @@ class my_environment extends uvm_env;
     
     extern virtual function void build_phase(uvm_phase phase);
     extern virtual function void connect_phase(uvm_phase phase);
+
+    function void start_of_simulation_phase(uvm_phase phase);
+    
+      //uvm_top.set_report_verbosity_level_hier(UVM_NONE);
+      uvm_top.set_report_verbosity_level_hier(UVM_HIGH);
+      //uvm_top.set_report_severity_action_hier(UVM_INFO, UVM_NO_ACTION);
+      //uvm_top.set_report_id_action_hier("ja", UVM_NO_ACTION);
+      
+      file_h = $fopen("uvm_basics_complete.log", "w");
+      uvm_top.set_report_default_file_hier(file_h);
+      uvm_top.set_report_severity_action_hier(UVM_INFO, UVM_DISPLAY + UVM_LOG);
+
+    endfunction: start_of_simulation_phase
+
 endclass : my_environment
 
 function void my_environment::build_phase(uvm_phase phase);
+
     super.build_phase(phase);
     `uvm_info(get_full_name(), "start building", UVM_LOW)
-    eth_agent_input_inst=new("eth_agent_input_inst",this);
-    eth_agent_input_inst.is_active=UVM_ACTIVE;
-    eth_model_inst=new("eth_model_inst",this);
-    eth_scoreboard_inst=new("eth_scoreboard_inst",this);
-    agt_mdl_fifo=new("agt_mdl_fifo",this);
-    agt_scb_fifo=new("agt_scb_fifo",this);
-    mdl_scb_fifo=new("mdl_scb_fifo",this);
+
+    my_agent_input_inst = my_agent::type_id::create("my_agent_input_inst",this);
+    my_agent_input_inst.is_active = UVM_ACTIVE;
+    my_model_inst = my_model::type_id::create("my_model_inst",this);
+    my_scoreboard_inst = my_scoreboard::type_id::create("my_scoreboard_inst",this);
+
+    agt_mdl_fifo = new("agt_mdl_fifo",this);
+    agt_scb_fifo = new("agt_scb_fifo",this);
+    mdl_scb_fifo = new("mdl_scb_fifo",this);
+
     `uvm_info(get_full_name(),"building end",UVM_LOW)
 endfunction : build_phase
 
 function void my_environment::connect_phase(uvm_phase phase);
-    super.connect_phase(phase);
+    
+     super.connect_phase(phase);
     `uvm_info(get_full_name(),"start connecting",UVM_LOW)
-    eth_agent_input_inst.uap.connect(agt_mdl_fifo.analysis_export);
-    eth_model_inst.port.connect(agt_mdl_fifo.blocking_get_export);
-    eth_model_inst.uap.connect(mdl_scb_fifo.analysis_export);
-    eth_scoreboard_inst.exp_port.connect(mdl_scb_fifo.blocking_get_export);
-    eth_scoreboard_inst.act_port.connect(agt_scb_fifo.blocking_get_export);
-    eth_agent_input_inst.uap_mon.connect(agt_scb_fifo.analysis_export);
+
+    my_agent_input_inst.uap.connect(agt_mdl_fifo.analysis_export);
+    my_model_inst.port.connect(agt_mdl_fifo.blocking_get_export);
+    my_model_inst.uap.connect(mdl_scb_fifo.analysis_export);
+    my_scoreboard_inst.exp_port.connect(mdl_scb_fifo.blocking_get_export);
+    my_scoreboard_inst.act_port.connect(agt_scb_fifo.blocking_get_export);
+    my_agent_input_inst.uap_mon.connect(agt_scb_fifo.analysis_export);
+
     `uvm_info(get_full_name(),"connecting end", UVM_LOW)
 endfunction : connect_phase
 
